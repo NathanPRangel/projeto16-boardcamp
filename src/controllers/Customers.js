@@ -17,10 +17,9 @@ export async function getCustomersById(req, res) {
     const customer = await db.query('SELECT * FROM customers WHERE id = $1', [id]);
 
     if (customer.rows.length === 0) {
-      return res.sendStatus(404); 
+      return res.sendStatus(404);
     }
 
-    
     const formattedCustomer = {
       ...customer.rows[0],
       birthday: customer.rows[0].birthday.toISOString().split('T')[0],
@@ -34,7 +33,7 @@ export async function getCustomersById(req, res) {
 }
 
 export async function postCustomers(req, res) {
-  const customer = res.locals.customer; 
+  const customer = res.locals.customer;
 
   try {
     await db.query('INSERT INTO customers (name, phone, cpf, birthday) VALUES ($1, $2, $3, $4);', [customer.name, customer.phone, customer.cpf, customer.birthday]);
@@ -53,7 +52,7 @@ export async function putCustomers(req, res) {
     const customerChanges = await db.query('SELECT * FROM customers WHERE id = $1', [id]);
 
     if (customerChanges.rows.length === 0) {
-      return res.sendStatus(404); 
+      return res.sendStatus(404);
     }
 
     if (customerChanges.rows[0].name !== customer.name) {
@@ -64,7 +63,6 @@ export async function putCustomers(req, res) {
       await db.query('UPDATE customers SET phone = $1 WHERE id = $2;', [customer.phone, id]);
     }
 
-   
     const formattedBirthday = customer.birthday.toISOString().split('T')[0];
     if (customerChanges.rows[0].birthday !== formattedBirthday) {
       await db.query('UPDATE customers SET birthday = $1 WHERE id = $2;', [formattedBirthday, id]);
@@ -74,15 +72,15 @@ export async function putCustomers(req, res) {
       const cpfExist = await db.query('SELECT * FROM customers WHERE cpf = $1;', [customer.cpf]);
 
       if (cpfExist.rows.length > 0) {
-        return res.sendStatus(409); 
+        return res.sendStatus(409);
       }
 
       await db.query('UPDATE customers SET cpf = $1 WHERE id = $2;', [customer.cpf, id]);
     }
 
-    return res.sendStatus(200);
+    return res.sendStatus(200); // Correct status code
   } catch (error) {
     console.log(error);
-    return res.status(500).send(error);
+    return res.sendStatus(500); // Return 500 only in case of an unexpected error
   }
 }
