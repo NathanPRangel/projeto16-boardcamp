@@ -78,9 +78,9 @@ export async function putCustomers(req, res) {
       await db.query('UPDATE customers SET cpf = $1 WHERE id = $2;', [customer.cpf, id]);
     }
 
-    return res.sendStatus(200); // Correct status code
+    return res.sendStatus(200); 
   } catch (error) {
     console.log(error);
-    return res.sendStatus(500); // Return 500 only in case of an unexpected error
+    return res.sendStatus(500); 
   }
 }
