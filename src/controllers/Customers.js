@@ -1,9 +1,11 @@
 import { db } from "../database/database.js";
 
 export async function getCustomers(req, res) {
-
     try {
         const customers = await db.query('SELECT * FROM customers;');
+        customers.rows.forEach(customer => {
+            customer.birthday = new Date(customer.birthday).toISOString().split('T')[0];
+        });
         res.send(customers.rows);
     } catch (error) {
         console.log(error);
@@ -29,7 +31,7 @@ export async function postCustomers(req, res) {
     const customer = res.locals.customer; 
 
     try {
-        // Format the birthday to "YYYY-MM-DD" before inserting it into the database
+        
         const formattedBirthday = new Date(customer.birthday).toISOString().split('T')[0];
 
         await db.query('INSERT INTO customers (name, phone, cpf, birthday) values ($1, $2, $3, $4);', [customer.name, customer.phone, customer.cpf, formattedBirthday]);
@@ -45,7 +47,7 @@ export async function putCustomers(req, res) {
     const { id, customer } = res.locals;
 
     try {
-        // Format the birthday to "YYYY-MM-DD" before updating it in the database
+        
         const formattedBirthday = new Date(customer.birthday).toISOString().split('T')[0];
 
         const customerChanges = await db.query('SELECT * FROM customers WHERE id = $1', [id]);
