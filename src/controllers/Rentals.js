@@ -1,96 +1,201 @@
-import { db } from '../database/database.js';
+import connection from "../db.js"
+import dayjs from "dayjs"
+import catchError from "../error/catchError.js"
+import { utilRental, utilSum } from "../utils/utilMap.js"
+import calculator from "../utils/calculator.js"
+import sqlstring from "sqlstring"
+import { offsetLimit, setLimit, setOffset } from "../utils/offsetLimit.js"
+import { setOrder, sortItems } from "../utils/order.js"
 
-export async function getRentals(req, res) {
+export async function allRentals(req, res) {
+
+    let { customerId, gameId, limit, offset, desc, order, status, startDate } = req.query
+
+    let filter = ''
+
+    offsetLimit(limit, offset)
+
+    const sortByFilters = {
+        id: 1,
+        customerId: 2,
+        gameId: 3,
+        rentDate: 4,
+        daysRented: 5,
+        returnDate: 6,
+        originalPrice: 7,
+        delayFee: 8
+    }
+
+    sortItems(order, desc, sortByFilters)
+
+    if (customerId) filter = `WHERE rentals."customerId" = ${sqlstring.escape(customerId)}`
+    if (gameId) filter = `WHERE rentals."gameId" = ${sqlstring.escape(gameId)}`
+
+    if (status === 'open' || status === 'closed') {
+        filter.includes('WHERE') ? filter = filter + ' AND' : filter = 'WHERE';
+        status === 'open' ? filter = filter + ` "returnDate" is null` : filter = filter + ` "returnDate" is not null`
+    }
+
+    if (startDate) {
+        filter.includes('WHERE') ? filter = filter + ' AND' : filter = 'WHERE'
+        filter = filter + ` "rentDate" >= ${sqlstring.escape(startDate)}`
+    }
+
     try {
 
-        const rentals = await db.query('SELECT * FROM rentals');
+        let { rows: arrRentals } = await connection.query(`
+            SELECT * FROM rentals 
+                ${filter}
+                ${setOffset}
+                ${setLimit}
+                ${setOrder}
+        `)
 
-        const customer = await db.query('SELECT customers.id, customers.name FROM customers;');
-        const game = await db.query('SELECT games.id, games.name FROM games;');
+        const { rows: arrGames } = await connection.query(`
+            SELECT 
+                games.id, 
+                games."categoryId", 
+                games.name AS "name",
+                categories.name AS "categoryName"
+            FROM games 
+                JOIN categories ON games."categoryId" = categories.id
+        `)
 
-        const newRentals = rentals.rows.map(r => ({
-            ...r,
-            customer: customer.rows.find(c => c.id === r.customerId),
-            game: game.rows.find(g => g.id === r.gameId)
-        }));
+        const { rows: arrCustomers } = await connection.query(`SELECT id, name FROM customers`)
 
-        return res.send(newRentals);
+        arrRentals = utilRental(arrRentals, arrCustomers, arrGames)
+
+        res.send(arrRentals)
 
     } catch (error) {
-        console.log(error);
-        return res.status(500).send(error);
+        catchError(res, error)
     }
 }
-export async function postRentals(req, res) {
-    const rental = res.locals.rental;
+
+export async function newRental(req, res) {
+    const { customerId, gameId, daysRented } = req.body
+
+    const rentDate = dayjs().format('YYYY-MM-DD')
+    const returnDate = null
+    const delayFee = null
 
     try {
-        const rentDate = new Date();
 
-        const price = await db.query('SELECT * FROM games WHERE id = $1;', [rental.gameId]);
+        const { rows: qtdStock } = await connection.query(`
+            SELECT "delayFee" FROM rentals WHERE "gameId" = ( $1 )  
+        `, [gameId])
 
-        const originalPrice = price.rows[0].pricePerDay * rental.daysRented;
+        let rentCount = 0
 
-        const returnDate = null;
-        const delayFee = null;
+        qtdStock.filter(el => el.delayFee === null && rentCount++)
 
-        await db.query(`INSERT INTO rentals 
-        ("customerId", "gameId", "rentDate", "daysRented", "returnDate", "originalPrice", "delayFee") 
-        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [rental.customerId, rental.gameId, rentDate, rental.daysRented, returnDate, originalPrice, delayFee]);
+        const { rows: game } = await connection.query(`
+            SELECT * FROM games WHERE id = ( $1 )
+        `, [gameId])
 
-        return res.sendStatus(201);
+        if (rentCount >= game[0].stockTotal) return res.sendStatus(400)
+
+        const originalPrice = game[0].pricePerDay * daysRented
+
+        const { rows: customer } = await connection.query(`
+            SELECT * FROM customers WHERE id = ( $1 )
+        `, [customerId])
+
+        if (customer.length === 0 || game.length === 0) return res.sendStatus(400)
+
+        await connection.query(`
+        INSERT INTO rentals ( "customerId", "gameId", "rentDate", "daysRented", "returnDate", "originalPrice", "delayFee" ) VALUES ( $1, $2, $3, $4, $5, $6, $7 )
+        `, [customerId, gameId, rentDate, daysRented, returnDate, originalPrice, delayFee])
+
+        res.sendStatus(201)
 
     } catch (error) {
-        console.log(error);
-        return res.status(500).send(error);
+        catchError(res, error)
     }
 }
-export async function finishRentals(req, res) {
-    const id = res.locals.id;
+
+export async function returnRental(req, res) {
+    const { id } = req.params
+
+    const returnDate = dayjs().format('YYYY-MM-DD')
 
     try {
-        const rental = await db.query('SELECT * FROM rentals WHERE id = $1', [id]);
 
-        const returnDate = new Date();
+        const { rows: rentals } = await connection.query(`
+            SELECT * FROM rentals WHERE id = $1
+        `, [id])
 
-        const rentDate = await db.query('SELECT * FROM rentals WHERE id = $1', [id]);
+        if (rentals.length === 0) return res.sendStatus(404)
 
-        const delay = (((returnDate - rentDate.rows[0].rentDate) / (1000 * 60 * 60 * 24)));
-   
-        const gameIdForPrice = await db.query('SELECT * FROM rentals WHERE id = $1', [id]);
+        if (rentals[0].returnDate !== null) return res.sendStatus(400)
 
-        const price = await db.query('SELECT * FROM games WHERE id = $1', [gameIdForPrice.rows[0].gameId]);
+        const delayFee = calculator(rentals[0].rentDate, rentals[0].daysRented, rentals[0].originalPrice)
 
-        let delayFee;
-        if (Math.round(delay) - rental.rows[0].daysRented <= 0) {
-            delayFee = 0;
+        await connection.query(`
+            UPDATE rentals
+            SET "returnDate" = $1, "delayFee" = $2
+            WHERE id = $3
+        `, [returnDate, delayFee, id])
 
-        } else {
+        res.sendStatus(200)
 
-            delayFee = (Math.round(delay) - rental.rows[0].daysRented - 1) * (price.rows[0].pricePerDay / 100);
+    } catch (error) {
+        catchError(res, error)
+    }
+}
 
-        };
+export async function deleteRental(req, res) {
+    const { id } = req.params
 
-        await db.query('UPDATE rentals SET "returnDate" = $1, "delayFee" = $2 WHERE id = $3;', [returnDate, delayFee.toFixed(2).replace('.', ''), id]);
+    try {
+
+        const { rows: rentals } = await connection.query(`
+            SELECT * FROM rentals WHERE id = ( $1 )
+        `, [id])
+
+        if (rentals.length === 0) return res.sendStatus(404)
+
+        if (rentals[0].returnDate !== null) return res.sendStatus(400)
+
+        await connection.query(`
+            DELETE FROM rentals WHERE id = ( $1 )
+        `, [id])
+
+        res.sendStatus(200)
+
+    } catch (error) {
+        catchError(res, error)
+    }
+}
+
+export async function allMetrics(req, res) {
+    const { startDate, endDate } = req.query
+
+    let filter = ''
+
+    if (startDate && endDate) {
+        filter = `WHERE "rentDate" >= ${sqlstring.escape(startDate)} AND "rentDate" <= ${sqlstring.escape(endDate)}` 
+    } else if (startDate) {
+        filter = `WHERE "rentDate" >= ${sqlstring.escape(startDate)}` 
+    } else if (endDate) {
+        filter = `WHERE "rentDate" <= ${sqlstring.escape(startDate)}` 
+    }
+
+    try {
         
-        return res.status(200).send('OK');
+        let { rows: sumRentals } = await connection.query(`
+            SELECT SUM("originalPrice") AS "originalSum",
+                SUM("delayFee") AS "delaySum",
+                COUNT(id) AS rentals
+                FROM rentals
+                ${filter}
+        `)
 
-    } catch (error) {
-        console.log(error);
-        return res.status(500).send(error);
-    }
-}
-export async function deleteRentals(req, res) {
-    const id = res.locals.id; 
-
-    try {
-
-        await db.query('DELETE FROM rentals WHERE id = $1', [id]);
-        return res.sendStatus(200);
+        sumRentals = utilSum(sumRentals)
         
+        res.send(sumRentals[0])
+
     } catch (error) {
-        console.log(error);
-        return res.status(500).send(error); 
+        catchError(res, error)
     }
 }

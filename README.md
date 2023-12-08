@@ -6,7 +6,7 @@
 
 
   -  Deploy api :https://projeto16-boardcamp.vercel.app/
-    
+    push
     
     # Requisitos
 
