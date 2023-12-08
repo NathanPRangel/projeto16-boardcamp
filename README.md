@@ -125,7 +125,7 @@ In the project directory, you can run:
 
 - First clone this repository
 
-- Run: npm i
+- Run: npm i -y 
 
 - Run: npm start
 
